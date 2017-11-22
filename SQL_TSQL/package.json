@@ -1,0 +1,32 @@
+{
+  "name": "sqldochtml",
+  "version": "1.0.0",
+  "description": "TSQL script that creates HTML doc out of table",
+  "main": "index.js",
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "author": "steve young",
+  "license": "MIT",
+  "devDependencies": {
+    "gulp": "^3.9.1",
+    "gulp-connect": "^5.0.0",
+    "gulp-server-livereload": "^1.9.2",
+    "gulp-webserver": "^0.9.1"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/steveyoungca/SQL_Doc_HTML.git"
+  },
+  "keywords": [
+    "tsql",
+    "sql",
+    "server",
+    "document",
+    "tables"
+  ],
+  "bugs": {
+    "url": "https://github.com/steveyoungca/SQL_Doc_HTML/issues"
+  },
+  "homepage": "https://github.com/steveyoungca/SQL_Doc_HTML#readme"
+}
