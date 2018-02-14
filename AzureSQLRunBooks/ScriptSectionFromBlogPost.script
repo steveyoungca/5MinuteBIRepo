@@ -1,0 +1,484 @@
+
+======================================
+Part 1 Add SQL User
+======================================
+
+
+
+
+-- ========================================================================================
+-- Create User as DBO template for Azure SQL Database and Azure SQL Data Warehouse Database
+-- ========================================================================================
+-- For login <login_name, sysname, login_name>, create a user in the database
+
+--use [Master]   -- Note "Use  DB" is not avalable in SQL Azure DB
+--Remember complexity requirements on your password
+CREATE LOGIN  RunBookUserAccount WITH password='password!!!';
+
+CREATE USER RunBookUserAccount
+	FOR LOGIN RunBookUserAccount
+	WITH DEFAULT_SCHEMA = dbo
+GO
+
+-- Add user to the database owner role
+EXEC sp_addrolemember N'db_owner', N'RunBookUserAccount'
+GO
+
+
+-- ========================================================================================
+--          Another Example, depending on your requirements
+-- ========================================================================================
+ 
+
+EXEC sp_droprolemember 'db_owner', 'RunBookUserAccount';  
+GO
+
+EXEC sp_addrolemember 'db_datareader', 'RunBookUserAccount';
+
+GO
+
+EXEC sp_addrolemember 'db_datawriter', 'RunBookUserAccount'; 
+GO
+
+
+
+======================================
+Part 2 Axure Run Book
+======================================
+
+
+
+
+workflow RunStoredProcAzureWEmail
+{
+    [cmdletbinding()]
+    param
+    (
+        # Fully-qualified name of the Azure DB server
+        [parameter(Mandatory=$true)]
+        [ValidateNotNullOrEmpty()]
+        [string] $SqlServerName = "<DBSERVER>.database.windows.net",
+
+        # Name of database to connect and execute against
+        [parameter(Mandatory=$true)]
+        [ValidateNotNullOrEmpty()]
+        [string] $DBName = "<DBNAME>",
+
+        # Name of stored procedure to be executed
+        [parameter(Mandatory=$true)]
+        [ValidateNotNullOrEmpty()]
+        [string] $StoredProcName = "usp_Stage_To_Prod_Employee",
+
+        # Credentials for $SqlServerName stored as an Azure Automation credential asset
+        [parameter(Mandatory=$true)]
+        [ValidateNotNullOrEmpty()]
+        [PSCredential] $Credential ,
+
+        # Subject for the email
+        [parameter(Mandatory=$true)]
+        [ValidateNotNullOrEmpty()]
+        [String] $SubjectText = "Running of usp_Stage_To_Prod_Employee through runbook",
+
+       # PowerShell Credentials for the Secure SMTP Service
+	    [parameter(Mandatory=$true)]
+        [ValidateNotNullOrEmpty()]
+        [String] $AzureOrgIdCredentialString = "RunEmail", 
+        
+        [parameter(Mandatory=$true)]
+        [ValidateNotNullOrEmpty()]
+        [String] $BodyText = "This is an automated mail send from Azure Automation relaying mail using Office 365.",
+                        
+        [parameter(Mandatory=$true)]
+        [ValidateNotNullOrEmpty()]
+        [String] $ToUser ="<To User or Group in Operations>"
+    )
+    inlinescript
+    {
+        Write-Output "========================================================================"
+        Write-Output “JOB STARTING”
+        Write-Output "========================================================================"
+
+        # Setup variables
+        $ServerName = $Using:SqlServerName
+        $UserId = $Using:Credential.UserName
+        $Password = ($Using:Credential).GetNetworkCredential().Password
+        $DB = $Using:DBName
+        $SP = $Using:StoredProcName
+        
+        #Email Variables
+        $Subject = $Using:SubjectText 
+        $AzureOrgIdCredential = $Using:AzureOrgIdCredentialString
+        $Body = $Using:BodyText
+        $To = $Using:ToUser
+        $From = "<RunBookEmailCred Email Address>.onmicrosoft.com"
+
+
+
+
+        Try {
+            #---------------------------------------------------------------------------------
+            # Get the PowerShell Credentials from Azure Automation account assets (For Email)
+            #---------------------------------------------------------------------------------               
+                # Get the PowerShell credential and prints its properties
+                $Cred = Get-AutomationPSCredential -Name $AzureOrgIdCredential
+                if ($Cred -eq $null)
+                {
+                    Write-Output "Credential entered: $AzureOrgIdCredential does not exist in the automation service. Please create one `n"   
+                }
+                else
+                {
+                    $CredUsername = $Cred.UserName
+                    $CredPassword = $Cred.GetNetworkCredential().Password
+                    Write-Output "We have the Credential Username: $CredUsername"
+                }
+
+            # Create and Open the PowerShell Connection to the Database
+            $DatabaseConnection = New-Object System.Data.SqlClient.SqlConnection
+            $DatabaseConnection.ConnectionString = “Data Source = $ServerName; Initial Catalog = $DB; User ID = $UserId; Password = $Password;”
+            $DatabaseConnection.Open();
+           
+            Write-Output “Connection to the Database is open”
+
+            # Create & Define command and query text
+            $DatabaseCommand = New-Object System.Data.SqlClient.SqlCommand
+            $DatabaseCommand.CommandType = [System.Data.CommandType]::StoredProcedure
+            $DatabaseCommand.Connection = $DatabaseConnection
+            $DatabaseCommand.CommandText = $SP
+            
+            #Set up for return value that will drive the success or failur from the stored Procedure.
+            $DatabaseCommand.Parameters.Add("@ReturnValue", [System.Data.SqlDbType]"Int") 
+            $DatabaseCommand.Parameters["@ReturnValue"].Direction = [System.Data.ParameterDirection]"ReturnValue"
+
+            Write-Output “Excuting the Query: $StoredProcName”
+           
+            # Execute the query
+            $OUT = $DatabaseCommand.ExecuteNonQuery()   | out-null
+
+            Write-Output $OUT
+            #Changed Code
+            $returnValue = $DatabaseCommand.Parameters["@ReturnValue"].Value
+            Write-Output "Return Value = $ReturnValue "
+
+            if($ReturnValue -eq $null -or $ReturnValue -eq 0)
+            {
+                Write-Output "An Error Occured"
+                $Subject = "Mail sent from Azure Automation using Office 365- $SP = Error in SP"
+            } 
+            else
+            {
+                Write-Output "Success"
+                $Subject = "Mail sent from Azure Automation using Office 365- $SP = Successful"
+            }
+            Write-Output " TRY SECTION COMPLETED”
+            Write-Output "========================================================================"
+ 
+ 
+            # ---------------------------------------------------------------------------------
+            # This section sends a mail using Office 365 secure SMTP services.  
+            # ---------------------------------------------------------------------------------
+            #$Subject = "Mail sent from Azure Automation using Office 365- $SP = Successful"
+            Send-MailMessage -To $To -Subject $Subject  -Body $Body -UseSsl -Port 587 -SmtpServer 'smtp.office365.com' -From $From -Credential $Cred
+              
+            Write-Output "Success Mail is now sent `n"
+            Write-Output " TRY Really Completed - Email sent `n”
+            Write-Output "========================================================================"
+        }
+        Catch {
+            # ---------------------------------------------------------------------------------
+            # This section sends a mail using Office 365 secure SMTP services.  
+            # ---------------------------------------------------------------------------------
+            $Subject = "Mail sent from Azure Automation using Office 365- $SP = Failure"
+            $Body = $_.Exception
+
+
+                 Send-MailMessage -To $To -Subject $Subject  -Body $Body -UseSsl -Port 587 -SmtpServer 'smtp.office365.com' -From $From -Credential $Cred
+              
+                    Write-Output "Failure  Mail is now sent `n"
+                    Write-Output "-------------------------------------------------------------------------"
+                Write-Error -Message $_.Exception
+                Throw $_.Exception
+
+        }
+
+        Finally{
+            # Close connection to DB
+            $DatabaseConnection.Close()
+            Write-Output “CONNECTION CLOSED”
+            Write-Output “JOB COMPLETED”
+            Write-Output "-------------------------------------------------------------------------"
+        }
+
+    }
+
+}
+
+
+======================================
+Part 3 Sample SQL Stored Procedure with Return values
+       Includes Logging to SQL Table that is not included
+       but left in as reference
+======================================
+
+SET ANSI_NULLS ON
+GO
+SET QUOTED_IDENTIFIER ON
+GO
+
+
+/*Testing  
+USE [TestLabTrainingDatabase]
+GO
+
+DECLARE @RC int
+DECLARE @_Logging_FLAG char(1)
+
+Set @_Logging_FLAG  = 'N' 
+
+EXECUTE @RC = [dbo].[usp_Stage_To_Prod_Employee] 
+   @_Logging_FLAG
+GO
+
+select count(*) from [dbo].[Prod_Employee]
+
+select count(*) from [dbo].[Stage_Employee]
+
+*/
+
+Create PROCEDURE [dbo].[usp_Stage_To_Prod_Employee]
+	@_Logging_FLAG CHAR(1) = 'N' 
+	
+AS
+
+
+
+
+BEGIN
+-- Return Value for Stored Proc
+    DECLARE @Returns INT
+    SET @Returns = 1 
+
+
+--XACT_ABORT On
+SET NOCOUNT ON;
+	--  ===================================================================   
+	--               Declare Variables
+	--  =================================================================== 
+	DECLARE @RC INT;
+	DECLARE @_TableName VARCHAR(100);
+	DECLARE @_PkgName VARCHAR(100);
+	DECLARE @_CommandTxt VARCHAR(2000);
+	DECLARE @_RunStage VARCHAR(100);
+	DECLARE @_ExecStartDT DATETIME;
+	DECLARE @_ExecStopDT DATETIME;
+	DECLARE @_ExtractRowCnt BIGINT;
+	DECLARE @_InsertRowCnt BIGINT;
+	DECLARE @_UpdateRowCnt BIGINT;
+	DECLARE @_ErrorRowCnt BIGINT;
+	DECLARE @_TableInitialRowCnt BIGINT;
+	DECLARE @_TableFinalRowCnt BIGINT;
+	DECLARE @_TableMaxDateTime DATETIME;
+	DECLARE @_SuccessfulProcessingInd CHAR(1);
+	DECLARE @_Notes VARCHAR(1000);
+	DECLARE @_MasterBatchNumber BIGINT;
+	DECLARE @_ChildBatchNumber BIGINT;
+	DECLARE @_SQLErrorNumber  INT;
+	DECLARE @_SQLErrorLine INT;
+	DECLARE @_SQLErrorMessage VARCHAR(1024); 
+	DECLARE @_SQLErrorProcedure VARCHAR(1024);
+	DECLARE @_SQLErrorSeverity INT; 
+	DECLARE @_SQLErrorState INT; 
+	DECLARE @_Azure_Input_File VARCHAR(256); 
+	DECLARE @_SQL_Statement NVARCHAR(1024); 
+	DECLARE @_SQL_Statement_Truncate NVARCHAR(1024);
+	--Error checking 
+	DECLARE @Err INT;
+	DECLARE @ErrPoint VARCHAR(100);
+
+		--  ===================================================================   
+	--               Setup 
+	--  =================================================================== 
+
+	--  !!!!!!!!!!!!!!!!! Change for each Stored Procedure !!!!!!!!!!!!!!!!!!!!!!!
+	--  Change for each package
+	SET @_TableName = '[dbo].[Prod_Employee]';
+	SET @_PkgName =  '[usp_Stage_To_Prod_Employee]';
+	SET @_RunStage = 'Package Start';
+	
+	--  Starting values
+	SET @_CommandTxt = NULL;
+	SET @_ExecStartDT = GETDATE();
+	SET @_ExecStopDT =  GETDATE();
+	SET @_ExtractRowCnt = NULL;
+	SET @_InsertRowCnt = NULL;
+	SET @_UpdateRowCnt = NULL;
+	SET @_ErrorRowCnt = NULL;
+	SET @_TableInitialRowCnt = NULL;
+	SET @_TableFinalRowCnt = NULL;
+	SET @_TableMaxDateTime = NULL;
+	SET @_SuccessfulProcessingInd = 'N';
+	SET @_Notes = 'Stage to Production ';
+	EXECUTE [dbo].[usp_Audit_BatchNumber] @_MasterBatchNumber OUTPUT;
+	--Set @_MasterBatchNumber = 33
+	SET @_ChildBatchNumber = NULL;
+	SET @_SQLErrorNumber = NULL;
+	SET @_SQLErrorLine = NULL;
+	SET @_SQLErrorMessage = NULL;
+	SET @_SQLErrorProcedure = NULL;
+	SET @_SQLErrorSeverity = NULL;
+	SET @_SQLErrorState = NULL;
+
+
+--  ================= Error Handle Begin Try ================================ 
+	BEGIN TRY  
+ 
+      BEGIN TRANSACTION
+
+	IF (@_Logging_FLAG = 'Y') 
+	BEGIN 
+	PRINT '[Stage to Prod] - Delete Prod Table.'; 
+	PRINT ' '; 
+	END; 
+
+
+	  --  !!!!!!!!!!!!!!!!! Change for each Stored Procedure !!!!!!!!!!!!!!!!!!!!!!!
+	  --  ================= Starting Rows Table ================================ 
+	 Select  @_TableInitialRowCnt =  Count(*) From [dbo].[Prod_Employee] 
+
+
+
+	--  ================= Clear out Table ================================ 
+	DELETE  [dbo].[Prod_Employee];
+
+
+	IF (@_Logging_FLAG = 'Y') 
+	BEGIN 
+	PRINT '[Copy Table] - Begin Insert.'; 
+	PRINT ' '; 
+	END; 
+
+	-- Set RunStage
+	SET @_RunStage = 'Insert';
+ 
+	--  ================= Insert Into Table ================================
+INSERT INTO [dbo].[Prod_Employee]
+           (EmployeeID
+		   ,FacilityID
+           ,OrganizationLevel
+           ,SalesPersonFlag
+           ,JobTitle
+           ,BirthDate
+           ,MaritalStatus
+           ,Gender
+           ,HireDate
+           ,SalariedFlag
+           ,VacationHours
+           ,SickLeaveHours
+           ,CurrentFlag
+           ,ModifiedDate
+           ,NameFull
+           ,PayGradeID)
+	Select 
+		    EmployeeID
+		   ,FacilityID
+           ,OrganizationLevel
+           ,SalesPersonFlag
+           ,JobTitle
+           ,BirthDate
+           ,MaritalStatus
+           ,Gender
+           ,HireDate
+           ,SalariedFlag
+           ,VacationHours
+           ,SickLeaveHours
+           ,CurrentFlag
+           ,ModifiedDate
+           ,NameFull
+           ,PayGradeID
+		   From [dbo].[Stage_Employee]
+
+			--  ================= Grab Row Changed ================================ 
+		Select @_InsertRowCnt = @@ROWCOUNT
+		
+		--  !!!!!!!!!!!!!!!!! Change for each Stored Procedure !!!!!!!!!!!!!!!!!!!!!!!
+		--  ================= Starting Rows Table ================================ 
+	 Select  @_TableFinalRowCnt =  Count(*) From [dbo].[Prod_Employee] 
+	
+	  --  ================= How long did the insert take ================================ 
+	  Set @_ExecStopDT =  getdate()
+
+	-- Set RunStage
+	SET @_RunStage = 'Insert Success';
+	
+		--  ================= Write Successful Input Log Entry ================================  
+	EXECUTE @RC = [dbo].[usp_Insert_Audit_ProcessLog_Entry] 
+		@_TableName,@_PkgName,@_SQL_Statement,@_RunStage,@_ExecStartDT,@_ExecStopDT,@_ExtractRowCnt,@_InsertRowCnt,
+		@_UpdateRowCnt,@_ErrorRowCnt,@_TableInitialRowCnt,@_TableFinalRowCnt,@_TableMaxDateTime,@_SuccessfulProcessingInd,
+		@_Notes,@_MasterBatchNumber,@_ChildBatchNumber,@_SQLErrorNumber,@_SQLErrorLine,@_SQLErrorMessage,@_SQLErrorProcedure,
+		@_SQLErrorSeverity,@_SQLErrorState; 
+
+  
+ 
+
+	  --  ================= How long did the Proces take ================================ 
+	  Set @_ExecStopDT =  getdate()
+	-- Set RunStage
+	SET @_RunStage = 'Process Complete';
+	SET @_SuccessfulProcessingInd = 'Y';
+
+	-- COMMIT the transaction if successful
+	  COMMIT
+		--  ================= Write Successful Transform Log Entry ================================  
+	EXECUTE @RC = [dbo].[usp_Insert_Audit_ProcessLog_Entry] 
+		@_TableName,@_PkgName,@_SQL_Statement,@_RunStage,@_ExecStartDT,@_ExecStopDT,@_ExtractRowCnt,@_InsertRowCnt,
+		@_UpdateRowCnt,@_ErrorRowCnt,@_TableInitialRowCnt,@_TableFinalRowCnt,@_TableMaxDateTime,@_SuccessfulProcessingInd,
+		@_Notes,@_MasterBatchNumber,@_ChildBatchNumber,@_SQLErrorNumber,@_SQLErrorLine,@_SQLErrorMessage,@_SQLErrorProcedure,
+		@_SQLErrorSeverity,@_SQLErrorState; 
+
+
+	--  ================= End Try ================================  
+	END TRY 
+
+	
+	--  ================= Begin Catch ================================  
+	BEGIN CATCH 
+           IF @@TRANCOUNT > 0
+         ROLLBACK
+
+		 --Set Error Return Value
+         SET @Returns = 0 
+	--  ================= Grab values and Write Log Entry ================================
+	SELECT 
+		@_SQLErrorNumber = ERROR_NUMBER(), 
+		@_SQLErrorProcedure = ERROR_PROCEDURE(), 
+		@_SQLErrorLine = ERROR_LINE(), 
+		@_SQLErrorMessage = ERROR_MESSAGE(), 
+		@_SQLErrorSeverity = 16,--ERROR_SEVERITY(),
+		@_SQLErrorState = 1,--ERROR_STATE(),
+		@_SuccessfulProcessingInd = 'N';
+
+
+		--Log Error
+		SET @_RunStage = 'Process Error';
+		--  ================= Send Error Log Entry ================================  
+		EXECUTE @RC = [dbo].[usp_Insert_Audit_ProcessLog_Entry] 
+		@_TableName,@_PkgName,@_CommandTxt,@_RunStage,@_ExecStartDT,@_ExecStopDT,@_ExtractRowCnt,@_InsertRowCnt,
+		@_UpdateRowCnt,@_ErrorRowCnt,@_TableInitialRowCnt,@_TableFinalRowCnt,@_TableMaxDateTime,@_SuccessfulProcessingInd,
+		@_Notes,@_MasterBatchNumber,@_ChildBatchNumber,@_SQLErrorNumber,@_SQLErrorLine,@_SQLErrorMessage,@_SQLErrorProcedure,
+		@_SQLErrorSeverity,@_SQLErrorState; 
+
+	-- Raise error 
+	RAISERROR ('An error occurred within a user transaction. 
+				Error Number        : %u 
+				Error Message       : %s  
+				Affected Procedure  : %s 
+				Affected Line Number: %u
+				Error Severity      : %u
+				Error State         : %u' 
+				, 16, 1 
+				, @_SQLErrorNumber, @_SQLErrorMessage, @_SQLErrorProcedure, @_SQLErrorLine, @_SQLErrorSeverity, @_SQLErrorState);       
+  
+	-- ** Error Handling - End Catch **    
+	END CATCH;     
+	    RETURN @Returns      
+	END;
+GO
