@@ -1,0 +1,2 @@
+Disclaimer: I work for Microsoft, however, this is not an official post and the views expressed are my own. 
+I offer no guarantees for the accuracy of the information shared and is for educational purposes only.
